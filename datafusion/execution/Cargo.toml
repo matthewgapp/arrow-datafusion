@@ -45,4 +45,5 @@ object_store = "0.7.0"
 parking_lot = "0.12"
 rand = "0.8"
 tempfile = "3"
+tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 url = "2.2"
