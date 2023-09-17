@@ -1388,22 +1388,6 @@ fn select_interval_out_of_range() {
 }
 
 #[test]
-fn recursive_ctes() {
-    let sql = "
-        WITH RECURSIVE numbers AS (
-              select 1 as n
-            UNION ALL
-              select n + 1 FROM numbers WHERE N < 10
-        )
-        select * from numbers;";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Recursive CTEs are not enabled",
-        err.strip_backtrace()
-    );
-}
-
-#[test]
 fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby() {
     quick_test(
         "SELECT MAX(first_name) FROM person GROUP BY first_name",
