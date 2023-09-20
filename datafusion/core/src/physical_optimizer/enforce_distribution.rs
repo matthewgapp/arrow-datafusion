@@ -60,6 +60,8 @@ use datafusion_physical_expr::{
 use datafusion_common::internal_err;
 use itertools::izip;
 
+use super::utils::is_recursive_query;
+
 /// The `EnforceDistribution` rule ensures that distribution requirements are
 /// met. In doing so, this rule will increase the parallelism in the plan by
 /// introducing repartitioning operators to the physical plan.
@@ -1118,6 +1120,7 @@ fn remove_unnecessary_repartition(
     let DistributionContext {
         mut plan,
         mut distribution_onwards,
+        has_recursive_ancestor,
     } = distribution_context;
 
     // Remove any redundant RoundRobin at the start:
@@ -1142,6 +1145,7 @@ fn remove_unnecessary_repartition(
     Ok(DistributionContext {
         plan,
         distribution_onwards,
+        has_recursive_ancestor,
     })
 }
 
@@ -1154,6 +1158,7 @@ fn update_plan_to_remove_unnecessary_final_order(
     let DistributionContext {
         plan,
         distribution_onwards,
+        ..
     } = dist_context;
     let new_children = izip!(plan.children(), distribution_onwards)
         .map(|(mut child, mut dist_onward)| {
@@ -1236,6 +1241,13 @@ fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
 ) -> Result<Transformed<DistributionContext>> {
+    let mut dist_context = dist_context;
+    if is_recursive_query(&dist_context.plan) {
+        dist_context.has_recursive_ancestor = true;
+    }
+    if dist_context.has_recursive_ancestor {
+        return Ok(Transformed::No(dist_context));
+    }
     let target_partitions = config.execution.target_partitions;
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
@@ -1263,6 +1275,7 @@ fn ensure_distribution(
     let DistributionContext {
         plan,
         mut distribution_onwards,
+        has_recursive_ancestor,
     } = remove_unnecessary_repartition(dist_context)?;
 
     let n_children = plan.children().len();
@@ -1423,6 +1436,7 @@ fn ensure_distribution(
             plan.clone().with_new_children(new_children)?
         },
         distribution_onwards,
+        has_recursive_ancestor: has_recursive_ancestor || is_recursive_query(&plan),
     };
     Ok(Transformed::Yes(new_distribution_context))
 }
@@ -1437,6 +1451,8 @@ struct DistributionContext {
     /// Keep track of associations for each child of the plan. If `None`,
     /// there is no distribution changing operator in its descendants.
     distribution_onwards: Vec<Option<ExecTree>>,
+    // keep track of whether we've encountered a RecursiveQuery
+    has_recursive_ancestor: bool,
 }
 
 impl DistributionContext {
@@ -1444,9 +1460,20 @@ impl DistributionContext {
     fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let length = plan.children().len();
         DistributionContext {
+            has_recursive_ancestor: is_recursive_query(&plan),
             plan,
             distribution_onwards: vec![None; length],
         }
+    }
+
+    fn new_from_plan_with_parent(
+        parent: Arc<dyn ExecutionPlan>,
+        cur_plan: Arc<dyn ExecutionPlan>,
+    ) -> Self {
+        let mut ctx = Self::new(cur_plan);
+        ctx.has_recursive_ancestor =
+            is_recursive_query(&parent) || ctx.has_recursive_ancestor;
+        ctx
     }
 
     /// Constructs a new context from children contexts.
@@ -1468,6 +1495,7 @@ impl DistributionContext {
                     // that change distribution, or preserves the existing
                     // distribution (starting from an operator that change distribution).
                     distribution_onwards,
+                    ..
                 } = context;
                 if plan.children().is_empty() {
                     // Plan has no children, there is nothing to propagate.
@@ -1519,7 +1547,9 @@ impl DistributionContext {
                 }
             })
             .collect();
+
         Ok(DistributionContext {
+            has_recursive_ancestor: is_recursive_query(&parent_plan),
             plan: with_new_children_if_necessary(parent_plan, children_plans)?.into(),
             distribution_onwards,
         })
@@ -1530,7 +1560,15 @@ impl DistributionContext {
         self.plan
             .children()
             .into_iter()
-            .map(|child| DistributionContext::new(child))
+            .map(|child| {
+                let mut ctx = DistributionContext::new_from_plan_with_parent(
+                    self.plan.clone(),
+                    child,
+                );
+                ctx.has_recursive_ancestor =
+                    self.has_recursive_ancestor || ctx.has_recursive_ancestor;
+                ctx
+            })
             .collect()
     }
 }
@@ -1562,7 +1600,10 @@ impl TreeNode for DistributionContext {
                 .into_iter()
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            DistributionContext::new_from_children_nodes(children_nodes, self.plan)
+            let mut ctx =
+                DistributionContext::new_from_children_nodes(children_nodes, self.plan)?;
+            ctx.has_recursive_ancestor |= self.has_recursive_ancestor;
+            Ok(ctx)
         }
     }
 }
