@@ -23,7 +23,8 @@ use datafusion_common::{
     plan_err, sql_err, Constraints, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
+    logical_plan, CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan,
+    LogicalPlanBuilder,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, SetOperator,
@@ -133,10 +134,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 static_metadata,
                             )?;
 
+                            let name = cte_name.clone();
+
                             // Step 2.2: Create a temporary relation logical plan that will be used
                             // as the input to the recursive term
                             let named_relation = LogicalPlanBuilder::named_relation(
-                                cte_name.as_str(),
+                                &name,
                                 Arc::new(named_relation_schema),
                             )
                             .build()?;
@@ -157,13 +160,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                             // ---------- Step 4: Create the final plan ------------------
                             // Step 4.1: Compile the final plan
-                            let final_plan = LogicalPlanBuilder::from(static_plan)
-                                .to_recursive_query(
-                                    cte_name.clone(),
-                                    recursive_plan,
-                                    distinct,
-                                )?
+                            let logical_plan = LogicalPlanBuilder::from(static_plan)
+                                .to_recursive_query(name, recursive_plan, distinct)?
                                 .build()?;
+
+                            let final_plan =
+                                self.apply_table_alias(logical_plan, cte.alias)?;
 
                             // Step 4.2: Remove the temporary relation from the planning context and replace it
                             // with the final plan.
