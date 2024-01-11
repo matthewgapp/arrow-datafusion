@@ -1702,6 +1702,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
+            LogicalPlan::RecursiveQuery(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for RecursiveQuery",
+            )),
         }
     }
 }

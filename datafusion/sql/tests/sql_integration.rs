@@ -1398,7 +1398,7 @@ fn recursive_ctes() {
         select * from numbers;";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "This feature is not implemented: Recursive CTEs are not supported",
+        "Recursive CTEs are not enabled",
         err.strip_backtrace()
     );
 }
