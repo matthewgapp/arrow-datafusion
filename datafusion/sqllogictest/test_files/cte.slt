@@ -211,3 +211,29 @@ SELECT * FROM my_cte t1, my_cte
 6 5
 6 5
 6 6
+
+# CTE within recursive CTE works and does not result in 'index out of bounds: the len is 0 but the index is 0'
+query
+WITH RECURSIVE "recursive_cte" AS (
+    SELECT 1 as "val"
+  UNION ALL (
+    WITH "sub_cte" AS (
+      SELECT
+        time,
+        1 as "val"
+      FROM
+        (SELECT DISTINCT "time" FROM "beg_account_balance")
+    )
+    SELECT
+      2 as "val"
+    FROM
+      "recursive_cte" 
+      FULL JOIN "sub_cte" ON 1 = 1
+    WHERE
+      "recursive_cte"."val" < 2
+  )
+)
+SELECT
+   *
+FROM
+  "recursive_cte";
